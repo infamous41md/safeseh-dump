@@ -16,7 +16,7 @@
 
 // return values for get_safeseh()
 enum {
-	NO_SAFESEH, HAS_SAFESEH, MANAGED_CODE, NO_SEH
+	NO_SAFESEH, HAS_SAFESEH, MANAGED_CODE, NO_SEH, RET_FAIL
 };
 
 enum {
@@ -87,7 +87,7 @@ BOOL SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege)
 
 	if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
 	{
-		printf("The token does not have the specified privilege. \n");
+		//printf("The token does not have the specified privilege. \n");
 		return FALSE;
 	} 
 
@@ -152,7 +152,7 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 		num = 0;
 		if(ReadProcessMemory(proc, (LPCVOID)config->SEHandlerTable,
 							safe_table, sz, &num) == FALSE)
-			die("ReadProcessMemory()");
+			die("ReadProcessMemory(), parse_config_dirs()");
 		if(num != sz)
 			die("Didn't read as many bytes from process as needed");
 		
@@ -202,8 +202,14 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
 		die("calloc");
 
 	//read in the entire module
-	if(ReadProcessMemory(proc, mod.lpBaseOfDll, pmem, sz, &n) == FALSE)
-		die("ReadProcessMemory()");
+	if(ReadProcessMemory(proc, mod.lpBaseOfDll, pmem, sz, &n) == FALSE){
+		
+		if(GetLastError() == 299){
+			printf("BUG: Congrats, you found that MODULEINFORMATION.SizeOfImage lies about actual size in WOW64 dlls!\n");
+		}
+		free(pmem);
+		return RET_FAIL;
+	}
 	if(n != sz)
 		die("Didn't read as many bytes from process as needed");
 
@@ -259,7 +265,7 @@ void phandlers(HANDLE proc, char *dll, HMODULE dll_base)
 		memset(&info, 0, sizeof(info));
 		if (GetModuleInformation(proc, dll_base, &info, sizeof(info)) == FALSE)
 			die("GetModuleInformation()");
-		printf("\n[*] Getting table for %s [ %#lx - %#lx ]\n", dll, dll_base, dll_base + info.SizeOfImage);
+		printf("\n[*] Getting table for %s [ %#lx - %#lx ]\n", dll, dll_base, (ULONG)dll_base + info.SizeOfImage);
 	}
 	else
 		printf("\n[*] Getting table for %s\n", dll);
@@ -281,6 +287,8 @@ void phandlers(HANDLE proc, char *dll, HMODULE dll_base)
 			return;
 		case MANAGED_CODE:
 			printf("    [*] %s is managed code (can't use it)\n", dll);
+			return;
+		case RET_FAIL:
 			return;
 	}
 
@@ -322,9 +330,15 @@ void enum_proc_safeseh(DWORD pid)
 		die("OpenProcess");
 
 	//get a list of all loaded modules
-	if(EnumProcessModules(proc, mods, 0x1000*sizeof(HMODULE),
-								&modsz) == FALSE)
-		die("EnumProcessModulesEx");
+	if(EnumProcessModulesEx(proc, mods, 0x1000*sizeof(HMODULE), &modsz, LIST_MODULES_ALL) == FALSE){
+		
+		//occurs on WOW64 when trying to list a 64bit processes modules
+		if(GetLastError() == 299){
+			printf("ERROR: Are you in WOW64 trying to enumerate a 64bit processes modules?\nNot possible, use 64bit version.\n");
+			exit(1);
+		}else
+			die("EnumProcessModulesEx");
+	}
 
 	//get handler table for any dll/exe in process
 	for(DWORD i = 0; i < modsz / sizeof(mods[0]); i++){
