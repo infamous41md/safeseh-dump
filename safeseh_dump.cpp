@@ -103,7 +103,7 @@ BOOL SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege)
 //
 // @return NO_SAFESEH | HAS_SAFESEH | MANAGED_CODE | NO_SEH
 //
-int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
+int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count, const char *name=NULL)
 {
 	UCHAR	*dentry = NULL;
 	ULONG	size = 0,	*safe_table = NULL;
@@ -120,7 +120,6 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 		die("ImageNtHeader");
 
 	//dll with no seh handlers at all, this means we can't jump into it.
-	//the offset and bit tested differ on vista/7
 	imgHdr = (PIMAGE_NT_HEADERS)nthdr;
 	if(imgHdr->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_NO_SEH)
 		return NO_SEH;
@@ -129,6 +128,9 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 	config = (IMAGE_LOAD_CONFIG_DIRECTORY32 *)ImageDirectoryEntryToDataEx(handle,
 					TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size, NULL);
 
+	if(name){
+		printf("%s size %#x config->size %#x\n", name, size, config ? config->Size : -1);
+	}
 	// see if the config structure has valid handler table
 	// the version specific tests are crucial as vista + server + xp behave different
 	if(config != NULL && 
@@ -181,7 +183,7 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 //
 // @return NO_SAFESEH | HAS_SAFESEH | MANAGED_CODE | NO_SEH
 //
-int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
+int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count, const char *name = NULL)
 {
 	DWORD	n = 0, sz = 0;
 	int	ret = 0;
@@ -212,7 +214,7 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
 	if(n != sz)
 		die("Didn't read as many bytes from process as needed");
 
-	ret = parse_config_dirs(proc, (HMODULE)pmem, table, count);
+	ret = parse_config_dirs(proc, (HMODULE)pmem, table, count, name);
 
 	free(pmem);
 	return ret;
@@ -272,7 +274,7 @@ void phandlers(HANDLE proc, const char *dll, HMODULE dll_base)
 	if(proc == NULL || dll_base == NULL)
 		ret = get_safeseh(dll, &table, &count);
 	else
-		ret = get_safeseh(proc, dll_base, &table, &count);
+		ret = get_safeseh(proc, dll_base, &table, &count, dll);
 
 	switch(ret){
 		case HAS_SAFESEH:
