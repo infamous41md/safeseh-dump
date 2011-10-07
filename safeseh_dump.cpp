@@ -25,22 +25,11 @@ using std::vector;
 
 // return values for get_safeseh()
 enum {
-	NO_SAFESEH, HAS_SAFESEH, MANAGED_CODE, NO_SEH, RET_FAIL
+	NO_SAFESEH = 0, HAS_SAFESEH, MANAGED_CODE, NO_SEH, RET_FAIL
 };
 
 enum {
 	XP = 0, SERVER_2K3, VISTA_WIN7
-};
-
-//these are offsets for the DllCharacteristics flag in the
-//optional header structure, indexed by above enum
-int dll_chars_offset[] = {
-0x5f, 0x5f, 0x5e
-};
-
-//same goes for the actual flag bit
-int dll_chars_flag[] = {
-0x4, 0x4, 0x400
 };
 
 char *os_names[] = { "XP", "SERVER 2K3", "VISTA_WIN7" };
@@ -121,9 +110,9 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 	IMAGE_NT_HEADERS		*nthdr;
 	IMAGE_LOAD_CONFIG_DIRECTORY32	*config;
 	DWORD	n = 0, i = 0, sz = 0;
-	int	ret = 0;
-	UCHAR	*tmp = NULL;
+	int	ret = NO_SAFESEH;
 	SIZE_T	num = 0;
+	PIMAGE_NT_HEADERS	imgHdr;
 
 	//load the NT header
 	nthdr = ImageNtHeader(handle);
@@ -132,8 +121,8 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count)
 
 	//dll with no seh handlers at all, this means we can't jump into it.
 	//the offset and bit tested differ on vista/7
-	tmp = (UCHAR *)nthdr;
-	if( ( *(WORD *)(tmp + dll_chars_offset[os_type]) ) & dll_chars_flag[os_type])
+	imgHdr = (PIMAGE_NT_HEADERS)nthdr;
+	if(imgHdr->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_NO_SEH)
 		return NO_SEH;
 
 	//load the load config type entry
