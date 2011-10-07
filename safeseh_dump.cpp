@@ -10,9 +10,11 @@
 #include <dbghelp.h>
 #include <stdio.h>
 #include <psapi.h>
+//#include <Imagehlp.h>
 
 #pragma comment(lib, "psapi")
 #pragma comment(lib, "dbghelp")
+#pragma comment(lib, "Imagehlp")
 
 // return values for get_safeseh()
 enum {
@@ -206,6 +208,7 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
 		
 		if(GetLastError() == 299){
 			printf("BUG: Congrats, you found that MODULEINFORMATION.SizeOfImage lies about actual size in WOW64 dlls!\n");
+			PLOADED_IMAGE p = ImageLoad("asdf", NULL);
 		}
 		free(pmem);
 		return RET_FAIL;
