@@ -6,11 +6,18 @@
  * infamous41md<>gmail<>com
  */
 
+#define DPSAPI_VERSION 1
+
 #include <windows.h>
 #include <dbghelp.h>
 #include <stdio.h>
+#include <tlhelp32.h>
 #include <psapi.h>
-//#include <Imagehlp.h>
+#include <vector>
+#include "util.h"
+#include <stdlib.h>
+
+using std::vector;
 
 #pragma comment(lib, "psapi")
 #pragma comment(lib, "dbghelp")
@@ -45,7 +52,7 @@ int os_type = -1;
 //////////////////////////////
 
 //
-void die(char *message)
+void die(const char *message)
 {	
 	DWORD	err = GetLastError();	
 	printf("%s failed with error %u\n", message, err);
@@ -208,7 +215,7 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
 		
 		if(GetLastError() == 299){
 			printf("BUG: Congrats, you found that MODULEINFORMATION.SizeOfImage lies about actual size in WOW64 dlls!\n");
-			PLOADED_IMAGE p = ImageLoad("asdf", NULL);
+			//PLOADED_IMAGE p = ImageLoad("asdf", NULL);
 		}
 		free(pmem);
 		return RET_FAIL;
@@ -233,7 +240,7 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count)
 //
 // @return NO_SAFESEH | HAS_SAFESEH | MANAGED_CODE | NO_SEH
 //
-int get_safeseh(char *dll, ULONG **table, ULONG *count)
+int get_safeseh(const char *dll, ULONG **table, ULONG *count)
 {
 	HMODULE	handle;
 	int	ret = 0;
@@ -257,7 +264,7 @@ int get_safeseh(char *dll, ULONG **table, ULONG *count)
 // @param dll - the name of dll to find table for
 // @param dll_base - dll base address or NULL if looking up non loaded dll
 //
-void phandlers(HANDLE proc, char *dll, HMODULE dll_base)
+void phandlers(HANDLE proc, const char *dll, HMODULE dll_base)
 {
 	ULONG	*table = NULL, count = 0, size = 0;
 	int	ret = 0;
@@ -318,12 +325,45 @@ void enable_debug()
 }
 
 //
+BOOL ListProcessModules(DWORD dwPID, vector<HMODULE> &mods) 
+{ 
+	HANDLE hModuleSnap = INVALID_HANDLE_VALUE; 
+	MODULEENTRY32 me32; 
+
+	//  Take a snapshot of all modules in the specified process. 
+	hModuleSnap = CreateToolhelp32Snapshot( TH32CS_SNAPMODULE, dwPID ); 
+	if( hModuleSnap == INVALID_HANDLE_VALUE )
+		return FALSE;
+
+	//  Set the size of the structure before using it. 
+	me32.dwSize = sizeof( MODULEENTRY32 ); 
+
+	//  Retrieve information about the first module, 
+	//  and exit if unsuccessful 
+	if( !Module32First( hModuleSnap, &me32 ) ) 
+	{ 
+		CloseHandle( hModuleSnap );     // Must clean up the snapshot object! 
+		return( FALSE ); 
+	} 
+
+	//  Now walk the module list of the process, 
+	//  and display information about each module 
+	do 
+	{
+		mods.push_back(me32.hModule);
+	} while( Module32Next( hModuleSnap, &me32 ) ); 
+
+	//  Do not forget to clean up the snapshot object. 
+	CloseHandle( hModuleSnap ); 
+	return( TRUE ); 
+} 
+
+//
 void enum_proc_safeseh(DWORD pid)
 {
 	HANDLE	proc;
-	HMODULE	mods[0x1000];
-	DWORD	modsz = 0,	*table = NULL, count = 0;
-	char	name[0x1000];
+	char	name[0x1000] = {0};
+	vector<HMODULE> mods;
 
 	printf("[!] Dumping safeseh for process id %d\n\n", pid);
 
@@ -332,23 +372,13 @@ void enum_proc_safeseh(DWORD pid)
 	if(proc == NULL)
 		die("OpenProcess");
 
-	//get a list of all loaded modules
-	if(EnumProcessModulesEx(proc, mods, 0x1000*sizeof(HMODULE), &modsz, LIST_MODULES_ALL) == FALSE){
-		
-		//occurs on WOW64 when trying to list a 64bit processes modules
-		if(GetLastError() == 299){
-			printf("ERROR: Are you in WOW64 trying to enumerate a 64bit processes modules?\nNot possible, use 64bit version.\n");
-			exit(1);
-		}else
-			die("EnumProcessModulesEx");
-	}
+	if(!ListProcessModules(pid, mods))
+		die("Can't list modules");
 
 	//get handler table for any dll/exe in process
-	for(DWORD i = 0; i < modsz / sizeof(mods[0]); i++){
-		
-		if(GetModuleBaseNameA(proc, mods[i], name, sizeof(name)) == 0)
+	for(DWORD i = 0; i < mods.size(); i++){
+		if(GetModuleBaseNameA(proc, mods[i], name, sizeof(name) - 1) == 0)
 			die("GetModuleBaseName");
-
 		phandlers(proc, name, mods[i]);
 	}
 
@@ -384,7 +414,7 @@ void get_os_type()
 
 //get the pid of a process by name
 //will return the first match if there are multiple matches
-DWORD get_pid_by_name(char *name)
+DWORD get_pid_by_name(const char *name)
 {
 	HANDLE	hproc;
 	char	pname[0x500],	*exename = NULL;
@@ -423,40 +453,53 @@ DWORD get_pid_by_name(char *name)
 	return found_pid;
 }
 
+//
+void usage(const char *prog)
+{
+	printf("Usage: %s [ -p pid ] [ -c process name ] [ -d DLL ]\n", prog);
+	exit(1);
+}
+
 /*
 */
 int main(int argc, char *argv[])
 {
 	DWORD	pid = -1;
+	vector<const char *>	dlls;
+	int	c = -1;
 
 	//
-	if(argc < 2){
-		printf("Usage: %s [ -p process id ] [ -c prcess name ] or [ list of dll names ]\n", argv[0]);
-		return 1;
+	while( (c = getopt(argc, argv, "p:c:d:")) != -1){
+		switch(c){
+			/********** no arguments ************/
+			case 'p':
+				pid = strtoul(optarg, NULL, 0x0);
+				break;
+			case 'c':
+				pid = get_pid_by_name(optarg);
+				break;
+			case 'd':
+				dlls.push_back(_strdup(optarg));
+				break;
+			default:
+			case '?':
+				usage(argv[0]);
+				break;
+		}
 	}
+
+	if(pid == -1 && dlls.size() == 0)
+		usage(argv[0]);
 
 	//will silently fail for unpriv user
 	enable_debug();
-
 	get_os_type();
 
-	//dump the handlers for a given process id
-	if(argc == 3 && (argv[1][1] == 'p' || argv[1][1] == 'c') ){
-		
-		if(argv[1][1] == 'p')
-			pid = atoi(argv[2]);
-		else{
-			pid = get_pid_by_name(argv[2]);
-			if(pid == -1)
-				die("Can't resolve process name to pid");
-		}
-
+	if(pid != -1){
 		enum_proc_safeseh(pid);
 	}else{
-		
-		//dump handlers for dlls listed on command line
-		for(int i = 1; i < argc; i++){
-			phandlers(NULL, argv[i], NULL);
+		for(DWORD i = 0; i < dlls.size(); i++){
+			phandlers(NULL, dlls[i], NULL);
 		}
 	}
 
