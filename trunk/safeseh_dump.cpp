@@ -128,9 +128,6 @@ int parse_config_dirs(HANDLE proc, HMODULE handle, ULONG **table, ULONG *count, 
 	config = (IMAGE_LOAD_CONFIG_DIRECTORY32 *)ImageDirectoryEntryToDataEx(handle,
 					TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size, NULL);
 
-	if(name){
-		printf("%s size %#x config->size %#x\n", name, size, config ? config->Size : -1);
-	}
 	// see if the config structure has valid handler table
 	// the version specific tests are crucial as vista + server + xp behave different
 	if(config != NULL && 
@@ -204,14 +201,20 @@ int get_safeseh(HANDLE proc, HMODULE dll_handle, ULONG **table, ULONG *count, co
 	//read in the entire module
 	if(ReadProcessMemory(proc, mod.lpBaseOfDll, pmem, sz, &n) == FALSE){
 		
-		if(GetLastError() == 299){
-			printf("BUG: Congrats, you found that MODULEINFORMATION.SizeOfImage lies about actual size in WOW64 dlls!\n");
-			//PLOADED_IMAGE p = ImageLoad("asdf", NULL);
+		//on WOW6432 there are typically gaps between sections
+		sz = 0;
+		if(GetLastError() == 299)
+			//printf("Reading piece by piece\n");
+			for(ULONG curOffset; curOffset < mod.SizeOfImage; curOffset += 0x1000)
+				if(ReadProcessMemory(proc, (LPCVOID)((ULONG)mod.lpBaseOfDll + curOffset), pmem + curOffset, 0x1000, &n))
+					sz += n;
+
+		//if we had any success reading in the loop above, don't quit
+		if(sz == 0){
+			free(pmem);
+			return RET_FAIL;
 		}
-		free(pmem);
-		return RET_FAIL;
-	}
-	if(n != sz)
+	}else if(n != sz)
 		die("Didn't read as many bytes from process as needed");
 
 	ret = parse_config_dirs(proc, (HMODULE)pmem, table, count, name);
@@ -278,16 +281,16 @@ void phandlers(HANDLE proc, const char *dll, HMODULE dll_base)
 
 	switch(ret){
 		case HAS_SAFESEH:
-			printf("    [*] %s has safe seh\n", dll);
+			printf("    [*] %s has safe seh (FAIL)\n", dll);
 			break;
 		case NO_SAFESEH:
-			printf("    [*] %s DOES NOT HAVE safe seh (KAPWWN!)\n", dll);
+			printf("    [*] %s DOES NOT HAVE safe seh (BLING)\n", dll);
 			return;
 		case NO_SEH:
-			printf("    [*] %s has no seh at all (can't use it)\n", dll);
+			printf("    [*] %s has no seh at all (FAIL)\n", dll);
 			return;
 		case MANAGED_CODE:
-			printf("    [*] %s is managed code (can't use it)\n", dll);
+			printf("    [*] %s is managed code (FAIL)\n", dll);
 			return;
 		case RET_FAIL:
 			return;
