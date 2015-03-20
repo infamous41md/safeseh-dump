@@ -1,0 +1,1 @@
+This utility will dump the SAFESEH exception handlers in a process or binary. It is intended for the vulnerability researcher trying to exploit a vulnerability that requires bypassing SAFESEH.
